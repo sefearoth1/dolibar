@@ -1,0 +1,121 @@
+---
+
+- name: Déploiement de dolibarr
+  hosts: dolibarr_servers
+  become: yes
+  become_method: sudo
+
+  tasks:
+  - name: Installation des dépendances
+    apt:
+      name:
+        - mariadb-server
+        - nginx
+        - python3-pymysql
+        - python3-pexpect
+        - php
+        - php-cli
+        - php-common
+        - php-curl
+        - php-gd
+        - php-intl
+        - php-json
+        - php-mbstring
+        - php-mysql
+        - php-soap
+        - php-xml
+        - php-xmlrpc
+        - php-zip
+        - php-fpm
+        - php-imap
+      state: present
+
+  - name: Initialisation de mariadb-server
+    ansible.builtin.expect:
+      command: mysql_secure_installation
+      responses:
+        'Enter current password for root': 'Erty123!'
+        'Switch to unix_socket authentication': 'n'
+        'Change the root password': 'y'
+        'New password': 'bddDolibarrCRM1'
+        'Re-enter new password': 'bddDolibarrCRM1'
+        'Remove anonymous users': 'y'
+        'Disallow root login remotely': 'n'
+        'Remove test database': 'y'
+        'Reload privilege tables now': 'y'
+    register: secure_mariadb
+    failed_when: "'failed' in secure_mariadb.stdout_lines"
+  - name: Création de la base de données bddDolibarr
+    community.mysql.mysql_db:
+      login_user: 'root'
+      login_password: 'bddDolibarrCRM1'
+      name: bddDolibarr
+      state: present
+  #- name: Création de l'utilisateur doliAdmin et Attribution des droits
+    #community.mysql.mysql_user:
+      #login_user: 'root'
+      #login_password: 'bddDolibarrCRM1'
+      #name: doliAdmin
+      #password: ais
+      #priv: 'doliBDD.*:ALL,GRANT'
+      #state: present
+  - name: Téléchargement de dolibarr
+    ansible.builtin.get_url:
+      url: https://github.com/Dolibarr/dolibarr/archive/refs/tags/17.0.1.tar.gz
+      dest: /tmp/dolibarr.tar.gz
+      checksum: sha256:2eddd545c07eae291ad46e48ab55d3adb988d99c29a8dfaa2e2fde0a890b0ddc
+    become: true
+  - name: Décompression de dolibarr
+    ansible.builtin.unarchive:
+      src: /tmp/dolibarr.tar.gz
+      dest: /var/www
+      remote_src: yes
+    become: true
+  - name: Attribution des droits au dossier dolibarr
+    ansible.builtin.file:
+      path: /var/www/dolibarr-17.0.1
+      owner: www-data
+      group: www-data
+      mode: '0755'
+      state: directory
+      recurse: true
+
+  - name: Backup du fichier /etc/nginx/sites-available/default
+    ansible.builtin.copy:
+      src: /etc/nginx/sites-available/default
+      dest: /etc/nginx/sites-available/default.bak
+      remote_src: yes
+
+  - name: Suppression du fichier /etc/nginx/sites-available/default
+    ansible.builtin.file:
+      path: /etc/nginx/sites-available/default
+      state: absent
+
+  - name: Création du nouveau fichier /etc/nginx/sites-available/default
+    ansible.builtin.file:
+      path: /etc/nginx/sites-available/default
+      state: touch
+      mode: u+rw,g+r,o+r
+
+  - name: Configuration du fichier /etc/nginx/sites-available/default
+    ansible.builtin.copy:
+      dest: /etc/nginx/sites-available/default
+      content: |
+        server {
+        listen 80 default_server;
+        listen [::]:80 default_server;
+        root /var/www/dolibarr-17.0.1/htdocs;
+          index index.php index.html index.htm index.nginx-debian.html;
+        location / {
+          try_files $uri $uri/ =404;
+        }
+        location ~ \.php$ {
+          include snippets/fastcgi-php.conf;
+          fastcgi_pass unix:/run/php/php7.4-fpm.sock;
+        }
+        }
+  - name: Redémarrage du service nginx
+    ansible.builtin.systemd:
+      name: nginx
+      state: restarted
+    become: yes
